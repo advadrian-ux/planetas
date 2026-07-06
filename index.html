@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explorador del Sistema Solar</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#000; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  canvas { display:block; }
+  .hud { position:fixed; color:#cfe8ff; text-shadow:0 0 6px rgba(0,150,255,.8); user-select:none; pointer-events:none; }
+  #velocimetro { left:20px; bottom:20px; font-size:15px; line-height:1.5; background:rgba(4,12,28,.55); border:1px solid rgba(90,170,255,.35); border-radius:10px; padding:10px 14px; }
+  #velocimetro .num { font-size:26px; font-weight:700; color:#7fd4ff; }
+  #velocimetro .turbo { color:#ffb347; font-weight:700; }
+  #aviso { left:50%; top:16%; transform:translateX(-50%); font-size:22px; font-weight:700; color:#ffd27f; text-shadow:0 0 12px rgba(255,140,0,.9); display:none; }
+  #prompt { left:50%; bottom:12%; transform:translateX(-50%); font-size:19px; background:rgba(4,20,40,.7); border:1px solid rgba(120,200,255,.5); border-radius:12px; padding:10px 22px; display:none; }
+  kbd { background:#12304f; border:1px solid #4a90d9; border-radius:5px; padding:1px 8px; font-family:inherit; font-weight:700; color:#aee2ff; }
+  #panelInfo { right:20px; top:20px; width:295px; background:rgba(3,10,24,.78); border:1px solid rgba(120,200,255,.4); border-radius:14px; padding:16px 18px; display:none; pointer-events:none; }
+  #panelInfo h2 { margin:0 0 4px; font-size:22px; color:#8fd7ff; }
+  #panelInfo h3 { margin:10px 0 4px; font-size:15px; color:#ffd27f; }
+  #panelInfo p { margin:4px 0; font-size:13px; line-height:1.45; color:#d7ecff; }
+  #ayuda { left:20px; top:20px; background:rgba(3,10,24,.72); border:1px solid rgba(120,200,255,.35); border-radius:14px; padding:14px 18px; font-size:13px; line-height:1.9; }
+  #ayuda h1 { margin:0 0 6px; font-size:17px; color:#8fd7ff; }
+  #ayuda.min { display:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ayuda" class="hud">
+  <h1>&#128640; Explorador del Sistema Solar</h1>
+  <div><kbd>&#8593;</kbd> acelerar &nbsp; <kbd>&#8592;</kbd><kbd>&#8594;</kbd> girar &nbsp; <kbd>&#8595;</kbd> frenar</div>
+  <div><kbd>Shift</kbd> HIPERVELOCIDAD &nbsp; <kbd>1</kbd>&ndash;<kbd>8</kbd> fijar destino</div>
+  <div><kbd>E</kbd> aterrizar (cerca de un planeta) &nbsp; <kbd>Q</kbd> despegar</div>
+  <div><kbd>H</kbd> mostrar / ocultar esta ayuda</div>
+</div>
+
+<div id="velocimetro" class="hud">
+  <div>VELOCIDAD</div>
+  <div><span class="num" id="vel">0</span> km/s <span class="turbo" id="turboTag"></span></div>
+  <div id="cercano"></div>
+</div>
+
+<div id="aviso" class="hud"></div>
+<div id="prompt" class="hud"></div>
+
+<div id="panelInfo" class="hud">
+  <h2 id="piNombre"></h2>
+  <p id="piDesc"></p>
+  <h3 id="piVida"></h3>
+  <p id="piVidaDesc"></p>
+  <p style="margin-top:10px;color:#9fc9ef"><kbd>&#8592;</kbd><kbd>&#8594;</kbd> explorar la superficie &nbsp; <kbd>Q</kbd> despegar</p>
+</div>
+
+<script>
+'use strict';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize(){ W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+const TAU = Math.PI * 2;
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+
+/* ============================= DATOS DEL SISTEMA ============================= */
+const SOL = { r: 480 };
+
+const PLANETAS = [
+  { nombre:'Mercurio', orbita:1500, r:80,  velOrb:0.030, color1:'#b3a58f', color2:'#6e6152', detalle:'crateres',
+    desc:'El planeta más cercano al Sol. Un mundo de roca abrasada, con días de 430&nbsp;°C y noches heladas.',
+    cielo:['#2a1f14','#8c6a3f'], suelo:['#8a7a63','#4c4234'], estrellas:0.3, solCielo:150,
+    vida:{ nombre:'Ferrolitos', tipo:'cangrejo', colores:['#d9822b','#7a3f10','#ffd27f'],
+      desc:'Crustáceos de caparazón metálico que absorben el calor solar y corretean entre los cráteres buscando minerales brillantes.' } },
+
+  { nombre:'Venus', orbita:2150, r:135, velOrb:0.022, color1:'#e8c46a', color2:'#b07f2e', detalle:'nubes',
+    desc:'Cubierto por densas nubes de ácido. Es el planeta más caliente del sistema por su brutal efecto invernadero.',
+    cielo:['#c98a2e','#f2d38a'], suelo:['#a3702c','#5e3d15'], estrellas:0, solCielo:110,
+    vida:{ nombre:'Nubelinas', tipo:'medusa', colores:['#ffe9b0','#e8913a','#fff6dd'],
+      desc:'Medusas aéreas que flotan sobre las nubes ácidas. Se inflan como globos dorados y se comunican con destellos de luz.' } },
+
+  { nombre:'Tierra', orbita:2850, r:140, velOrb:0.018, color1:'#3f8fd4', color2:'#1d4e8a', detalle:'tierra',
+    desc:'El oasis azul. Océanos, continentes y una atmósfera perfecta hacen de él el planeta más acogedor.',
+    cielo:['#3d86d8','#aee0ff'], suelo:['#4d9e4a','#2c5e2b'], estrellas:0, solCielo:90,
+    vida:{ nombre:'Verdianos', tipo:'clasico', colores:['#5fd45f','#2e8b2e','#d6ffd6'],
+      desc:'Simpáticos visitantes verdes con antenas que pasean por los prados. Saludan a todas las naves que aterrizan.' } },
+
+  { nombre:'Marte', orbita:3650, r:105, velOrb:0.0145, color1:'#d1683c', color2:'#8a3c1e', detalle:'crateres',
+    desc:'El planeta rojo. Desiertos oxidados, el volcán más grande del sistema y tormentas de polvo colosales.',
+    cielo:['#7a2e18','#e8a06a'], suelo:['#b55a33','#6e3018'], estrellas:0.15, solCielo:70,
+    vida:{ nombre:'Marcianos', tipo:'clasico', colores:['#c9c9c9','#8a8a8a','#a8ffb0'],
+      desc:'Los clásicos marcianitos grises de ojos enormes. Viven en cuevas bajo la arena y cultivan hongos luminosos.' } },
+
+  { nombre:'Júpiter', orbita:4900, r:320, velOrb:0.0095, color1:'#e0b184', color2:'#9c6a3f', detalle:'bandas',
+    desc:'El gigante gaseoso. Tan grande que cabrían 1.300 Tierras dentro. Su Gran Mancha Roja es una tormenta eterna.',
+    cielo:['#8a5a2e','#e8c48a'], suelo:['#c98f52','#7a5228'], estrellas:0.1, solCielo:45,
+    vida:{ nombre:'Globoides', tipo:'globo', colores:['#ffb46a','#d67a2e','#ffe0b0'],
+      desc:'Criaturas globo gigantes que flotan entre las bandas de nubes. Nunca tocan el suelo: nacen, viven y sueñan en el aire.' } },
+
+  { nombre:'Saturno', orbita:6300, r:280, velOrb:0.0075, color1:'#e8d4a0', color2:'#b09a5e', detalle:'bandas', anillos:true,
+    desc:'La joya del sistema. Sus anillos de hielo y roca miden 280.000&nbsp;km de ancho pero solo unos metros de grosor.',
+    cielo:['#6e5a30','#e8d8a8'], suelo:['#c4a862','#7a6636'], estrellas:0.2, solCielo:38, anillosCielo:true,
+    vida:{ nombre:'Anillados', tipo:'patinador', colores:['#e8f4ff','#9ecbe8','#5e8aa8'],
+      desc:'Elegantes seres de hielo que patinan a toda velocidad. Coleccionan fragmentos de los anillos y los llevan como coronas.' } },
+
+  { nombre:'Urano', orbita:7600, r:190, velOrb:0.006, color1:'#8fd8dc', color2:'#4a9aa8', detalle:'liso',
+    desc:'El gigante helado que rueda de lado: su eje está tumbado 98 grados. Vientos de metano a &minus;220&nbsp;°C.',
+    cielo:['#0e2e38','#6ec8d4'], suelo:['#7ab8c4','#33606e'], estrellas:0.6, solCielo:26,
+    vida:{ nombre:'Cristalinos', tipo:'cristal', colores:['#c8f4ff','#6ed8e8','#ffffff'],
+      desc:'Seres geométricos de hielo vivo. Crecen como cristales, brillan al pensar y cantan con campanadas de escarcha.' } },
+
+  { nombre:'Neptuno', orbita:8800, r:185, velOrb:0.005, color1:'#4a72d8', color2:'#22399c', detalle:'liso',
+    desc:'El mundo más lejano y ventoso: ráfagas de 2.100&nbsp;km/h barren su atmósfera azul profundo.',
+    cielo:['#050a2a','#2a4aa8'], suelo:['#3a56b0','#141f52'], estrellas:0.85, solCielo:20,
+    vida:{ nombre:'Abisales', tipo:'calamar', colores:['#7fe8ff','#3a7ad4','#d0f6ff'],
+      desc:'Calamares bioluminiscentes que nadan por la atmósfera densa como si fuera un océano. Sus luces dibujan constelaciones vivas.' } },
+];
+
+/* ============================= ESTADO ============================= */
+const nave = { x: 2850 + 400, y: 0, vx: 0, vy: 0, ang: -Math.PI/2 };
+const ACC = 950, ACC_TURBO = 4200, VMAX = 950, VMAX_TURBO = 5600, GIRO = 3.1;
+
+let modo = 'espacio';            // 'espacio' | 'superficie'
+let planetaActual = null;        // planeta donde estamos aterrizados
+let objetivo = -1;               // índice de planeta destino (teclas 1-8)
+let zoom = 1, tiempo = 0;
+let fade = { a:0, dir:0, cb:null }; // transición fundido a negro
+let camSup = 0;                  // desplazamiento de cámara en superficie
+let criaturas = [], decoracion = [];
+
+const teclas = {};
+addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  teclas[e.key.toLowerCase()] = true;
+  if (e.key.toLowerCase() === 'h') document.getElementById('ayuda').classList.toggle('min');
+  if (/^[1-8]$/.test(e.key) && modo === 'espacio') objetivo = (objetivo === +e.key-1) ? -1 : +e.key-1;
+  if (e.key.toLowerCase() === 'e' && modo === 'espacio' && planetaCercano && distCercano < planetaCercano.r + 260 && fade.dir === 0) aterrizar(planetaCercano);
+  if (e.key.toLowerCase() === 'q' && modo === 'superficie' && fade.dir === 0) despegar();
+});
+addEventListener('keyup', e => teclas[e.key.toLowerCase()] = false);
+
+/* ============================= ESTRELLAS DE FONDO ============================= */
+const CAPAS_ESTRELLAS = [];
+for (let capa = 0; capa < 3; capa++) {
+  const pts = [];
+  for (let i = 0; i < 220; i++) pts.push({ x: Math.random()*2000, y: Math.random()*2000, s: Math.random()*1.6 + .4, tw: Math.random()*TAU });
+  CAPAS_ESTRELLAS.push({ pts, par: 0.15 + capa*0.25 });
+}
+
+/* ============================= POSICIONES ORBITALES ============================= */
+function posPlaneta(p) {
+  const a = p.velOrb * tiempo + p.orbita; // fase inicial distinta por órbita
+  return { x: Math.cos(a) * p.orbita, y: Math.sin(a) * p.orbita };
+}
+let planetaCercano = null, distCercano = Infinity;
+
+/* ============================= TRANSICIONES ============================= */
+function transicion(cb) { fade.dir = 1; fade.cb = cb; }
+function pasoFade(dt) {
+  if (fade.dir === 1) { fade.a += dt*2.2; if (fade.a >= 1) { fade.a = 1; fade.dir = -1; if (fade.cb) { fade.cb(); fade.cb = null; } } }
+  else if (fade.dir === -1) { fade.a -= dt*2.2; if (fade.a <= 0) { fade.a = 0; fade.dir = 0; } }
+}
+
+function aterrizar(p) {
+  transicion(() => {
+    modo = 'superficie'; planetaActual = p; camSup = 0;
+    nave.vx = nave.vy = 0;
+    generarSuperficie(p);
+    const pi = document.getElementById('panelInfo');
+    document.getElementById('piNombre').innerHTML = '&#129680; ' + p.nombre;
+    document.getElementById('piDesc').innerHTML = p.desc;
+    document.getElementById('piVida').innerHTML = '&#128126; Vida detectada: ' + p.vida.nombre;
+    document.getElementById('piVidaDesc').innerHTML = p.vida.desc;
+    pi.style.display = 'block';
+    document.getElementById('velocimetro').style.display = 'none';
+  });
+}
+function despegar() {
+  transicion(() => {
+    const pos = posPlaneta(planetaActual);
+    nave.x = pos.x; nave.y = pos.y - planetaActual.r - 320;
+    nave.ang = -Math.PI/2; nave.vx = 0; nave.vy = -180;
+    modo = 'espacio'; planetaActual = null;
+    document.getElementById('panelInfo').style.display = 'none';
+    document.getElementById('velocimetro').style.display = 'block';
+  });
+}
+
+/* ============================= SUPERFICIE: GENERACIÓN ============================= */
+let semilla = 1;
+function rnd() { semilla = (semilla * 16807) % 2147483647; return (semilla - 1) / 2147483646; }
+
+function alturaSuelo(x, p) {
+  const s = PLANETAS.indexOf(p) + 1;
+  return H*0.74
+    + Math.sin(x*0.0016 + s*7) * 46
+    + Math.sin(x*0.0043 + s*13) * 22
+    + Math.sin(x*0.011 + s*29) * 8;
+}
+
+function generarSuperficie(p) {
+  semilla = PLANETAS.indexOf(p)*991 + 7;
+  criaturas = []; decoracion = [];
+  const n = 9 + Math.floor(rnd()*4);
+  for (let i = 0; i < n; i++) {
+    criaturas.push({
+      x: (rnd()-0.5) * 4200, dir: rnd() < .5 ? -1 : 1,
+      vel: 20 + rnd()*55, tam: 0.75 + rnd()*0.7,
+      fase: rnd()*TAU, salto: 0, pausa: rnd()*3
+    });
+  }
+  const nd = 26;
+  for (let i = 0; i < nd; i++) decoracion.push({ x:(rnd()-0.5)*4600, tam:0.6+rnd()*1.1, v:rnd() });
+}
+
+/* ============================= ACTUALIZACIÓN ============================= */
+function actualizar(dt) {
+  tiempo += dt;
+  pasoFade(dt);
+
+  if (modo === 'espacio') {
+    const turbo = teclas['shift'];
+    if (teclas['arrowleft'] || teclas['a']) nave.ang -= GIRO*dt;
+    if (teclas['arrowright'] || teclas['d']) nave.ang += GIRO*dt;
+    if (teclas['arrowup'] || teclas['w']) {
+      const a = turbo ? ACC_TURBO : ACC;
+      nave.vx += Math.cos(nave.ang)*a*dt;
+      nave.vy += Math.sin(nave.ang)*a*dt;
+    }
+    if (teclas['arrowdown'] || teclas['s'] || teclas[' ']) { nave.vx *= Math.pow(0.12, dt); nave.vy *= Math.pow(0.12, dt); }
+    // rozamiento suave y límite de velocidad
+    nave.vx *= Math.pow(0.55, dt); nave.vy *= Math.pow(0.55, dt);
+    const v = Math.hypot(nave.vx, nave.vy), vmax = turbo ? VMAX_TURBO : VMAX;
+    if (v > vmax) { nave.vx *= vmax/v; nave.vy *= vmax/v; }
+    nave.x += nave.vx*dt; nave.y += nave.vy*dt;
+
+    // repulsión del Sol
+    const dSol = Math.hypot(nave.x, nave.y);
+    const aviso = document.getElementById('aviso');
+    if (dSol < SOL.r + 500) {
+      const f = (SOL.r + 500 - dSol) * 14; // los escudos empujan hacia fuera
+      nave.vx += nave.x/dSol * f * dt;
+      nave.vy += nave.y/dSol * f * dt;
+      aviso.style.display = 'block';
+      aviso.textContent = '☀️ ¡ALERTA! RADIACIÓN SOLAR EXTREMA — los escudos te empujan lejos';
+    } else aviso.style.display = 'none';
+
+    // planeta más cercano
+    planetaCercano = null; distCercano = Infinity;
+    for (const p of PLANETAS) {
+      const pos = posPlaneta(p);
+      const d = Math.hypot(nave.x-pos.x, nave.y-pos.y) - p.r;
+      if (d < distCercano) { distCercano = d; planetaCercano = p; }
+    }
+
+    // zoom según velocidad
+    const zObj = clamp(1 / (1 + v/1600), 0.34, 1);
+    zoom = lerp(zoom, zObj, 1 - Math.pow(0.02, dt));
+
+    // HUD
+    document.getElementById('vel').textContent = Math.round(v/10);
+    document.getElementById('turboTag').textContent = turbo && (teclas['arrowup']||teclas['w']) ? '⚡ HIPERVELOCIDAD' : '';
+    document.getElementById('cercano').textContent =
+      planetaCercano ? `Más cercano: ${planetaCercano.nombre} · ${Math.max(0,Math.round(distCercano/10))} Mm` : '';
+    const prompt = document.getElementById('prompt');
+    if (planetaCercano && distCercano < planetaCercano.r + 260) {
+      prompt.style.display = 'block';
+      prompt.innerHTML = `Pulsa <kbd>E</kbd> para aterrizar en <b>${planetaCercano.nombre}</b>`;
+    } else prompt.style.display = 'none';
+
+  } else { // superficie
+    if (teclas['arrowleft'] || teclas['a']) camSup -= 420*dt;
+    if (teclas['arrowright'] || teclas['d']) camSup += 420*dt;
+    camSup = clamp(camSup, -2100, 2100);
+    document.getElementById('prompt').style.display = 'none';
+
+    const p = planetaActual;
+    for (const c of criaturas) {
+      c.fase += dt * 3;
+      if (c.pausa > 0) { c.pausa -= dt; }
+      else {
+        c.x += c.dir * c.vel * dt * (p.vida.tipo === 'patinador' ? 3.2 : 1);
+        if (rnd() < 0.002) { c.dir *= -1; c.pausa = 0.5 + rnd()*2; }
+        if (c.x > 2300) c.dir = -1;
+        if (c.x < -2300) c.dir = 1;
+      }
+    }
+  }
+}
+
+/* ============================= DIBUJO: ESPACIO ============================= */
+function dibujarEspacio() {
+  ctx.fillStyle = '#03040c'; ctx.fillRect(0,0,W,H);
+
+  // estrellas con parallax (patrón infinito de 2000x2000)
+  for (const capa of CAPAS_ESTRELLAS) {
+    const ox = -nave.x * capa.par * zoom, oy = -nave.y * capa.par * zoom;
+    ctx.fillStyle = '#ffffff';
+    for (const s of capa.pts) {
+      const x = ((s.x + ox) % 2000 + 2000) % 2000 * (W/2000);
+      const y = ((s.y + oy) % 2000 + 2000) % 2000 * (H/2000);
+      ctx.globalAlpha = 0.35 + 0.5 * Math.abs(Math.sin(s.tw + tiempo*1.5));
+      ctx.fillRect(x, y, s.s, s.s);
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.save();
+  ctx.translate(W/2, H/2); ctx.scale(zoom, zoom); ctx.translate(-nave.x, -nave.y);
+
+  // órbitas
+  ctx.strokeStyle = 'rgba(120,180,255,0.10)'; ctx.lineWidth = 2/zoom;
+  for (const p of PLANETAS) { ctx.beginPath(); ctx.arc(0,0,p.orbita,0,TAU); ctx.stroke(); }
+
+  // Sol
+  const g = ctx.createRadialGradient(0,0,SOL.r*0.2, 0,0,SOL.r*2.4);
+  g.addColorStop(0,'rgba(255,240,180,1)'); g.addColorStop(0.35,'rgba(255,180,60,0.9)');
+  g.addColorStop(0.6,'rgba(255,120,20,0.25)'); g.addColorStop(1,'rgba(255,80,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,SOL.r*2.4,0,TAU); ctx.fill();
+  ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.arc(0,0,SOL.r*(1+0.015*Math.sin(tiempo*3)),0,TAU); ctx.fill();
+
+  // planetas
+  for (const p of PLANETAS) {
+    const pos = posPlaneta(p);
+    dibujarPlaneta(pos.x, pos.y, p);
+  }
+
+  // nave
+  dibujarNave();
+  ctx.restore();
+
+  dibujarIndicadorObjetivo();
+  dibujarMinimapa();
+}
+
+function dibujarPlaneta(x, y, p) {
+  ctx.save(); ctx.translate(x, y);
+  if (p.anillos) {
+    ctx.strokeStyle = 'rgba(220,200,150,0.55)'; ctx.lineWidth = p.r*0.32;
+    ctx.beginPath(); ctx.ellipse(0,0,p.r*1.9,p.r*0.62,-0.35,0,TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(160,140,100,0.35)'; ctx.lineWidth = p.r*0.1;
+    ctx.beginPath(); ctx.ellipse(0,0,p.r*2.25,p.r*0.74,-0.35,0,TAU); ctx.stroke();
+  }
+  const g = ctx.createRadialGradient(-p.r*0.35,-p.r*0.35,p.r*0.15, 0,0,p.r);
+  g.addColorStop(0,p.color1); g.addColorStop(1,p.color2);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,p.r,0,TAU); ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.arc(0,0,p.r,0,TAU); ctx.clip();
+  if (p.detalle === 'bandas') {
+    ctx.globalAlpha = 0.22; ctx.fillStyle = p.color2;
+    for (let i=-3;i<=3;i++) ctx.fillRect(-p.r, i*p.r*0.28 - p.r*0.06, p.r*2, p.r*0.13);
+  } else if (p.detalle === 'crateres') {
+    ctx.globalAlpha = 0.25; ctx.fillStyle = '#000';
+    const s0 = p.orbita|0; let sm = s0;
+    const rl = () => { sm = (sm*16807)%2147483647; return (sm-1)/2147483646; };
+    for (let i=0;i<8;i++){ ctx.beginPath(); ctx.arc((rl()-0.5)*1.6*p.r,(rl()-0.5)*1.6*p.r, p.r*(0.06+rl()*0.1),0,TAU); ctx.fill(); }
+  } else if (p.detalle === 'tierra') {
+    ctx.globalAlpha = 0.85; ctx.fillStyle = '#3f9e46';
+    ctx.beginPath(); ctx.ellipse(-p.r*0.3,-p.r*0.15,p.r*0.42,p.r*0.3,0.4,0,TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(p.r*0.35,p.r*0.3,p.r*0.3,p.r*0.22,-0.5,0,TAU); ctx.fill();
+    ctx.globalAlpha = 0.5; ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(p.r*0.1,-p.r*0.45,p.r*0.5,p.r*0.13,0.15,0,TAU); ctx.fill();
+  } else if (p.detalle === 'nubes') {
+    ctx.globalAlpha = 0.3; ctx.fillStyle = '#fff2cc';
+    for (let i=0;i<4;i++){ ctx.beginPath(); ctx.ellipse(0, (i-1.5)*p.r*0.45, p.r*0.95, p.r*0.14, 0.12, 0, TAU); ctx.fill(); }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  // nombre
+  ctx.fillStyle = 'rgba(200,230,255,0.85)';
+  ctx.font = `${Math.max(26, 20/zoom)}px Helvetica`;
+  ctx.textAlign = 'center';
+  ctx.fillText(p.nombre, 0, -p.r - Math.max(30, 24/zoom));
+  ctx.restore();
+}
+
+function dibujarNave() {
+  ctx.save(); ctx.translate(nave.x, nave.y); ctx.rotate(nave.ang);
+  const esc = Math.max(1, 0.7/zoom); ctx.scale(esc, esc);
+  const empuje = teclas['arrowup'] || teclas['w'];
+  const turbo = empuje && teclas['shift'];
+  if (empuje) { // llama
+    const L = turbo ? 58 + Math.random()*26 : 26 + Math.random()*12;
+    const gl = ctx.createLinearGradient(-14,0,-14-L,0);
+    gl.addColorStop(0, turbo ? '#aef' : '#ffd27f'); gl.addColorStop(1,'rgba(255,80,0,0)');
+    ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.moveTo(-14,-7); ctx.lineTo(-14-L,0); ctx.lineTo(-14,7); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = '#d8e6f2';
+  ctx.beginPath(); ctx.moveTo(24,0); ctx.lineTo(-12,-13); ctx.lineTo(-7,0); ctx.lineTo(-12,13); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#5fd4ff';
+  ctx.beginPath(); ctx.arc(8,0,4.5,0,TAU); ctx.fill();
+  ctx.strokeStyle = '#7a8ea0'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+}
+
+function dibujarIndicadorObjetivo() {
+  if (objetivo < 0) return;
+  const p = PLANETAS[objetivo], pos = posPlaneta(p);
+  const dx = pos.x - nave.x, dy = pos.y - nave.y;
+  const d = Math.hypot(dx,dy);
+  const sx = W/2 + dx*zoom, sy = H/2 + dy*zoom;
+  if (sx > 60 && sx < W-60 && sy > 60 && sy < H-60) return; // ya visible
+  const ang = Math.atan2(dy,dx);
+  const rx = W/2 - 70, ry = H/2 - 70;
+  const t = Math.min(Math.abs(rx/Math.cos(ang)), Math.abs(ry/Math.sin(ang)));
+  const ix = W/2 + Math.cos(ang)*t, iy = H/2 + Math.sin(ang)*t;
+  ctx.save(); ctx.translate(ix,iy); ctx.rotate(ang);
+  ctx.fillStyle = '#ffd27f';
+  ctx.beginPath(); ctx.moveTo(18,0); ctx.lineTo(-8,-11); ctx.lineTo(-8,11); ctx.closePath(); ctx.fill();
+  ctx.rotate(-ang);
+  ctx.font = '13px Helvetica'; ctx.textAlign = 'center';
+  ctx.fillText(`${p.nombre} · ${Math.round((d-p.r)/10)} Mm`, 0, 30);
+  ctx.restore();
+}
+
+function dibujarMinimapa() {
+  const T = 190, mx = W - T - 18, my = H - T - 18, esc = T/2 / 9600;
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,10,24,0.7)'; ctx.strokeStyle = 'rgba(120,200,255,0.4)';
+  ctx.beginPath(); ctx.roundRect(mx,my,T,T,12); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.roundRect(mx,my,T,T,12); ctx.clip();
+  ctx.translate(mx+T/2, my+T/2);
+  ctx.fillStyle = '#ffd76a'; ctx.beginPath(); ctx.arc(0,0,4,0,TAU); ctx.fill();
+  for (let i=0;i<PLANETAS.length;i++){
+    const p = PLANETAS[i], pos = posPlaneta(p);
+    ctx.strokeStyle = 'rgba(120,180,255,0.15)';
+    ctx.beginPath(); ctx.arc(0,0,p.orbita*esc,0,TAU); ctx.stroke();
+    ctx.fillStyle = i === objetivo ? '#ffd27f' : p.color1;
+    ctx.beginPath(); ctx.arc(pos.x*esc, pos.y*esc, i === objetivo ? 4 : 2.6, 0, TAU); ctx.fill();
+  }
+  // nave parpadeante
+  ctx.fillStyle = Math.sin(tiempo*8) > 0 ? '#7fd4ff' : '#ffffff';
+  ctx.beginPath(); ctx.arc(nave.x*esc, nave.y*esc, 3, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+/* ============================= DIBUJO: SUPERFICIE ============================= */
+function dibujarSuperficie() {
+  const p = planetaActual;
+  // cielo
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,p.cielo[0]); g.addColorStop(1,p.cielo[1]);
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // estrellas si la atmósfera es fina
+  if (p.estrellas > 0) {
+    ctx.fillStyle = '#fff';
+    for (const s of CAPAS_ESTRELLAS[0].pts) {
+      if (s.y/2000 > 0.55) continue;
+      ctx.globalAlpha = p.estrellas * (0.4 + 0.5*Math.abs(Math.sin(s.tw + tiempo)));
+      ctx.fillRect(s.x/2000*W, s.y/2000*H*0.6, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // sol en el cielo (más pequeño cuanto más lejos)
+  const sx = W*0.72, sy = H*0.2;
+  const gs = ctx.createRadialGradient(sx,sy,2, sx,sy,p.solCielo*2.2);
+  gs.addColorStop(0,'rgba(255,250,220,1)'); gs.addColorStop(0.3,'rgba(255,220,140,0.7)'); gs.addColorStop(1,'rgba(255,180,80,0)');
+  ctx.fillStyle = gs; ctx.beginPath(); ctx.arc(sx,sy,p.solCielo*2.2,0,TAU); ctx.fill();
+  ctx.fillStyle = '#fff8dc'; ctx.beginPath(); ctx.arc(sx,sy,p.solCielo*0.4,0,TAU); ctx.fill();
+
+  // anillos de Saturno vistos desde el suelo
+  if (p.anillosCielo) {
+    ctx.strokeStyle = 'rgba(240,225,180,0.35)'; ctx.lineWidth = 26;
+    ctx.beginPath(); ctx.arc(W*0.3, H*1.5, H*1.35, -2.4, -0.7); ctx.stroke();
+    ctx.strokeStyle = 'rgba(240,225,180,0.18)'; ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.arc(W*0.3, H*1.5, H*1.42, -2.4, -0.7); ctx.stroke();
+  }
+
+  // montañas lejanas (parallax)
+  ctx.fillStyle = p.suelo[1]; ctx.globalAlpha = 0.45;
+  ctx.beginPath(); ctx.moveTo(0,H);
+  for (let x=0; x<=W; x+=14) ctx.lineTo(x, alturaSuelo((x+camSup*0.4)*1.7+5000, p) - 120);
+  ctx.lineTo(W,H); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // suelo principal
+  const gsuelo = ctx.createLinearGradient(0,H*0.55,0,H);
+  gsuelo.addColorStop(0,p.suelo[0]); gsuelo.addColorStop(1,p.suelo[1]);
+  ctx.fillStyle = gsuelo;
+  ctx.beginPath(); ctx.moveTo(0,H);
+  for (let x=0; x<=W; x+=10) ctx.lineTo(x, alturaSuelo(x+camSup, p));
+  ctx.lineTo(W,H); ctx.closePath(); ctx.fill();
+
+  // decoración (plantas / rocas / cristales según planeta)
+  for (const d of decoracion) {
+    const x = d.x - camSup + W/2;
+    if (x < -80 || x > W+80) continue;
+    dibujarDecoracion(x, alturaSuelo(x+camSup, p), d, p);
+  }
+
+  // nave aterrizada (fija en el mundo, en x=0)
+  dibujarNaveAterrizada(-camSup + W/2, p);
+
+  // criaturas
+  for (const c of criaturas) {
+    const x = c.x - camSup + W/2;
+    if (x < -120 || x > W+120) continue;
+    dibujarCriatura(x, alturaSuelo(x+camSup, p), c, p);
+  }
+}
+
+function dibujarNaveAterrizada(x, p) {
+  const y = alturaSuelo(x+camSup, p);
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = '#7a8ea0'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(-22,-8); ctx.lineTo(-30,2); ctx.moveTo(22,-8); ctx.lineTo(30,2); ctx.stroke();
+  ctx.fillStyle = '#d8e6f2';
+  ctx.beginPath(); ctx.ellipse(0,-26,34,20,0,0,TAU); ctx.fill();
+  ctx.strokeStyle = '#9fb4c8'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#5fd4ff';
+  ctx.beginPath(); ctx.arc(0,-32,9,0,TAU); ctx.fill();
+  // luz de baliza
+  ctx.fillStyle = `rgba(255,80,80,${0.4+0.6*Math.abs(Math.sin(tiempo*4))})`;
+  ctx.beginPath(); ctx.arc(0,-48,4,0,TAU); ctx.fill();
+  ctx.restore();
+}
+
+function dibujarDecoracion(x, y, d, p) {
+  const t = d.tam;
+  ctx.save(); ctx.translate(x,y);
+  const tipo = p.vida.tipo;
+  if (tipo === 'cristal' || tipo === 'patinador') { // cristales de hielo
+    ctx.fillStyle = `rgba(200,240,255,${0.5+d.v*0.4})`;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-8*t,-4*t); ctx.lineTo(-3*t,-34*t); ctx.lineTo(4*t,-8*t); ctx.closePath(); ctx.fill();
+  } else if (tipo === 'clasico' && p.nombre === 'Tierra') { // árboles
+    ctx.fillStyle = '#5e4326'; ctx.fillRect(-2*t,-18*t,4*t,18*t);
+    ctx.fillStyle = '#3f9e46'; ctx.beginPath(); ctx.arc(0,-24*t,12*t,0,TAU); ctx.fill();
+  } else if (p.nombre === 'Marte') { // hongos luminosos
+    ctx.fillStyle = '#c9c9c9'; ctx.fillRect(-1.5*t,-12*t,3*t,12*t);
+    ctx.fillStyle = `rgba(168,255,176,${0.6+0.4*Math.sin(tiempo*2+d.v*9)})`;
+    ctx.beginPath(); ctx.arc(0,-13*t,7*t,Math.PI,0); ctx.fill();
+  } else { // rocas
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(0,-4*t,10*t,7*t,0,0,TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---- criaturas alienígenas ---- */
+function dibujarCriatura(x, ySuelo, c, p) {
+  const [c1,c2,c3] = p.vida.colores;
+  const t = c.tam, f = c.fase;
+  ctx.save();
+  const flota = ['medusa','globo','calamar'].includes(p.vida.tipo);
+  const y = flota ? ySuelo - 90*t - Math.sin(f*0.6)*26*t : ySuelo;
+  ctx.translate(x, y);
+  if (c.dir < 0) ctx.scale(-1,1);
+
+  switch (p.vida.tipo) {
+    case 'cangrejo': {
+      const paso = Math.sin(f*3)*3;
+      ctx.strokeStyle = c2; ctx.lineWidth = 2.5*t;
+      for (let i=0;i<3;i++){
+        const px = (i-1)*8*t, o = (i%2? paso:-paso);
+        ctx.beginPath(); ctx.moveTo(px,-8*t); ctx.lineTo(px+o,0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px,-8*t); ctx.lineTo(px-o,0); ctx.stroke();
+      }
+      ctx.fillStyle = c1; ctx.beginPath(); ctx.ellipse(0,-13*t,15*t,9*t,0,0,TAU); ctx.fill();
+      ctx.fillStyle = c3; ctx.beginPath(); ctx.arc(6*t,-16*t,2.6*t,0,TAU); ctx.arc(11*t,-16*t,2.6*t,0,TAU); ctx.fill();
+      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(6.5*t,-16*t,1.1*t,0,TAU); ctx.arc(11.5*t,-16*t,1.1*t,0,TAU); ctx.fill();
+      break; }
+    case 'medusa': {
+      ctx.fillStyle = `rgba(255,233,176,0.85)`;
+      ctx.beginPath(); ctx.arc(0,0,16*t,Math.PI,0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = c2;
+      ctx.strokeStyle = c2; ctx.lineWidth = 2*t;
+      for (let i=0;i<5;i++){
+        ctx.beginPath(); ctx.moveTo((i-2)*6*t, 2);
+        ctx.quadraticCurveTo((i-2)*6*t + Math.sin(f+i)*6*t, 14*t, (i-2)*6*t + Math.sin(f+i)*10*t, 24*t);
+        ctx.stroke();
+      }
+      ctx.fillStyle = `rgba(255,255,255,${0.5+0.5*Math.sin(f*1.3)})`;
+      ctx.beginPath(); ctx.arc(0,-6*t,4*t,0,TAU); ctx.fill();
+      break; }
+    case 'clasico': {
+      const paso = Math.sin(f*2.4)*4*t;
+      ctx.strokeStyle = c2; ctx.lineWidth = 3*t;
+      ctx.beginPath(); ctx.moveTo(-3*t,-14*t); ctx.lineTo(-4*t+paso,0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(3*t,-14*t); ctx.lineTo(4*t-paso,0); ctx.stroke();
+      ctx.fillStyle = c1;
+      ctx.beginPath(); ctx.ellipse(0,-22*t,9*t,11*t,0,0,TAU); ctx.fill();      // cuerpo
+      ctx.beginPath(); ctx.ellipse(0,-40*t,10*t,9*t,0,0,TAU); ctx.fill();      // cabeza
+      ctx.strokeStyle = c1; ctx.lineWidth = 1.6*t;                              // antenas
+      ctx.beginPath(); ctx.moveTo(-4*t,-48*t); ctx.lineTo(-7*t,-56*t); ctx.moveTo(4*t,-48*t); ctx.lineTo(7*t,-56*t); ctx.stroke();
+      ctx.fillStyle = c3; ctx.beginPath(); ctx.arc(-7*t,-57*t,2*t,0,TAU); ctx.arc(7*t,-57*t,2*t,0,TAU); ctx.fill();
+      ctx.fillStyle = '#000';                                                   // ojazos
+      ctx.beginPath(); ctx.ellipse(-4*t,-41*t,3*t,4.4*t,0.2,0,TAU); ctx.ellipse(4*t,-41*t,3*t,4.4*t,-0.2,0,TAU); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-4.6*t,-42.4*t,1.1*t,0,TAU); ctx.arc(3.4*t,-42.4*t,1.1*t,0,TAU); ctx.fill();
+      break; }
+    case 'globo': {
+      const R = 30*t;
+      const gg = ctx.createRadialGradient(-R*0.3,-R*0.3,R*0.2, 0,0,R);
+      gg.addColorStop(0,c3); gg.addColorStop(1,c1);
+      ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(0,0,R,0,TAU); ctx.fill();
+      ctx.strokeStyle = c2; ctx.lineWidth = 2*t;
+      for (let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo((i-1.5)*10*t, R*0.8); ctx.quadraticCurveTo((i-1.5)*10*t+Math.sin(f+i)*8*t, R+26*t, (i-1.5)*10*t, R+40*t); ctx.stroke(); }
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-8*t,-4*t,3*t,0,TAU); ctx.arc(8*t,-4*t,3*t,0,TAU); ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1.6*t;
+      ctx.beginPath(); ctx.arc(0,6*t,7*t,0.2,Math.PI-0.2); ctx.stroke();       // sonrisa
+      break; }
+    case 'patinador': {
+      const incl = Math.sin(f*1.2)*0.2;
+      ctx.rotate(incl);
+      ctx.strokeStyle = c3; ctx.lineWidth = 2*t;                                // estela
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.moveTo(-14*t,0); ctx.lineTo(-46*t,2*t); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = c1;
+      ctx.beginPath(); ctx.moveTo(0,-44*t); ctx.lineTo(10*t,-6*t); ctx.lineTo(-10*t,-6*t); ctx.closePath(); ctx.fill(); // cuerpo estilizado
+      ctx.fillStyle = c2; ctx.fillRect(-12*t,-6*t,24*t,3*t);                    // patín
+      ctx.fillStyle = '#0a2a3a';
+      ctx.beginPath(); ctx.arc(0,-34*t,3.4*t,0,TAU); ctx.fill();                // ojo
+      ctx.strokeStyle = c3; ctx.lineWidth = 1.6*t;                              // corona de anillos
+      ctx.beginPath(); ctx.ellipse(0,-46*t,8*t,2.6*t,0,0,TAU); ctx.stroke();
+      break; }
+    case 'cristal': {
+      const brillo = 0.5+0.5*Math.sin(f*1.7);
+      ctx.fillStyle = c2;
+      ctx.beginPath(); ctx.moveTo(0,-52*t); ctx.lineTo(12*t,-20*t); ctx.lineTo(6*t,0); ctx.lineTo(-6*t,0); ctx.lineTo(-12*t,-20*t); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${0.25+brillo*0.35})`;
+      ctx.beginPath(); ctx.moveTo(0,-52*t); ctx.lineTo(5*t,-22*t); ctx.lineTo(-3*t,-4*t); ctx.lineTo(-8*t,-20*t); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${brillo})`;
+      ctx.beginPath(); ctx.arc(-3*t,-30*t,2.4*t,0,TAU); ctx.arc(4*t,-30*t,2.4*t,0,TAU); ctx.fill();
+      break; }
+    case 'calamar': {
+      ctx.fillStyle = `rgba(127,232,255,${0.25+0.2*Math.sin(f)})`;             // aura luminosa
+      ctx.beginPath(); ctx.arc(0,0,26*t,0,TAU); ctx.fill();
+      ctx.fillStyle = c2;
+      ctx.beginPath(); ctx.ellipse(0,-6*t,10*t,16*t,0,0,TAU); ctx.fill();
+      ctx.strokeStyle = c1; ctx.lineWidth = 2.2*t;
+      for (let i=0;i<5;i++){ ctx.beginPath(); ctx.moveTo((i-2)*4*t,8*t); ctx.quadraticCurveTo((i-2)*4*t+Math.sin(f*1.5+i)*7*t, 22*t, (i-2)*4*t+Math.sin(f*1.5+i)*11*t, 32*t); ctx.stroke(); }
+      ctx.fillStyle = c3;
+      ctx.beginPath(); ctx.arc(-4*t,-10*t,2.6*t,0,TAU); ctx.arc(4*t,-10*t,2.6*t,0,TAU); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${0.5+0.5*Math.sin(f*2)})`;            // fotóforos
+      for (let i=0;i<3;i++){ ctx.beginPath(); ctx.arc(0,(-2+i*5)*t,1.4*t,0,TAU); ctx.fill(); }
+      break; }
+  }
+  ctx.restore();
+}
+
+/* ============================= BUCLE PRINCIPAL ============================= */
+// posición inicial: junto a la Tierra, con la invitación a aterrizar visible
+{ const t0 = posPlaneta(PLANETAS[2]); nave.x = t0.x + PLANETAS[2].r + 380; nave.y = t0.y; }
+
+let tPrev = performance.now();
+function bucle(tNow) {
+  const dt = Math.min(0.05, (tNow - tPrev)/1000); tPrev = tNow;
+  actualizar(dt);
+  if (modo === 'espacio') dibujarEspacio(); else dibujarSuperficie();
+  if (fade.a > 0) { ctx.fillStyle = `rgba(0,0,0,${fade.a})`; ctx.fillRect(0,0,W,H); }
+  requestAnimationFrame(bucle);
+}
+requestAnimationFrame(bucle);
+</script>
+</body>
+</html>
