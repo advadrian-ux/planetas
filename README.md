@@ -1,7 +1,9 @@
 # 🚀 Explorador del Sistema Solar
 
-Un sistema solar interactivo con una nave que puedes pilotar a hipervelocidad,
-aterrizar en cada uno de los 8 planetas y descubrir su vida alienígena.
+Un sistema solar interactivo con una nave que puedes pilotar a hipervelocidad.
+Aterriza en cualquiera de los 8 planetas, baja de la nave como astronauta y
+recorre el planeta entero a pie: cada mundo tiene su propia gravedad, vida
+alienígena y lugares secretos por descubrir.
 
 ## Cómo ejecutarlo en tu Mac
 
@@ -12,16 +14,37 @@ No necesita internet ni instalación: todo está dentro del archivo.
 
 ## Controles
 
+### En el espacio
 | Tecla | Acción |
 |---|---|
 | ↑ | Acelerar |
-| ← / → | Girar la nave (en superficie: explorar) |
+| ← / → | Girar la nave |
 | ↓ | Frenar |
-| **Shift** | ⚡ Hipervelocidad |
+| **Shift** | ⚡ Hipervelocidad (con estela y líneas de velocidad) |
 | 1 – 8 | Fijar un planeta como destino (flecha guía) |
-| **E** | Aterrizar (cuando estés cerca de un planeta) |
-| **Q** | Despegar |
+| **E** | Aterrizar cuando estés cerca de un planeta |
+
+### En un planeta
+| Tecla | Acción |
+|---|---|
+| ← / → | Caminar |
+| **Shift** | Correr |
+| **Espacio** | Saltar (¡la altura depende de la gravedad del planeta!) |
+| **Q** | Despegar (tienes que volver junto a la nave) |
 | H | Mostrar / ocultar la ayuda |
+
+## Explorar los planetas
+
+- Cada planeta es un **mundo circular completo**: si caminas siempre en la
+  misma dirección, acabas dando la vuelta entera.
+- Cada planeta tiene **lugares secretos** que descubrir (volcanes, pirámides,
+  un OVNI estrellado, ciudades alienígenas, faros de hielo...). El contador
+  muestra cuántos te faltan y la barra inferior marca tu posición.
+- La **gravedad cambia**: en Mercurio o Marte saltas altísimo; en Júpiter los
+  saltos son cortos y pesados.
+- Las criaturas **reaccionan** cuando te acercas: te miran y muestran su emoción.
+- Mira el cielo: verás las lunas de cada planeta, los anillos de Saturno desde
+  el suelo y la Gran Mancha Roja de Júpiter en el horizonte.
 
 ## Los habitantes
 
